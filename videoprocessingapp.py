@@ -1,105 +1,90 @@
-# ===============================================
-#      ADVANCED VIDEO PROCESSING APP
-#  (NO NEURAL NETWORKS — PURE CV + Filters)
-# ===============================================
-
+import streamlit as st
 import cv2
 import numpy as np
+import tempfile
+import os
 
-# ----------------------------
-# 1. Load video
-# ----------------------------
-video_path = "input.mp4"   # ← Change your video here
-cap = cv2.VideoCapture(video_path)
+st.title("🎥 Advanced Video Processing App (Streamlit Compatible)")
 
-if not cap.isOpened():
-    print("Error: Cannot open video file.")
-    exit()
+uploaded_video = st.file_uploader("Upload video", type=["mp4", "avi", "mov"])
 
-# Video properties
-W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-FPS = cap.get(cv2.CAP_PROP_FPS)
+if uploaded_video:
+    # Save uploaded file temporarily
+    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    temp_input.write(uploaded_video.read())
+    temp_input.close()
 
-# Output writer
-out = cv2.VideoWriter(
-    "advanced_processed_video.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    FPS,
-    (W, H)
-)
+    st.video(temp_input.name)
+    st.write("Processing video... please wait.")
 
-print("Processing... Please wait.")
+    # Output file
+    temp_output = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
 
-# Background subtractor for motion detection
-back_sub = cv2.createBackgroundSubtractorMOG2()
+    cap = cv2.VideoCapture(temp_input.name)
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    # Get video properties
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    FPS = cap.get(cv2.CAP_PROP_FPS)
 
-    # ----------------------------
-    # 2. Apply all filters
-    # ----------------------------
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(temp_output.name, fourcc, FPS, (W, H))
 
-    # Grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray_color = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    # Background subtractor
+    back_sub = cv2.createBackgroundSubtractorMOG2()
 
-    # Rotate 180°
-    rotate_180 = cv2.rotate(frame, cv2.ROTATE_180)
+    progress = st.progress(0)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Mirror
-    mirror_h = cv2.flip(frame, 1)
+    count = 0
 
-    # Edge Detection
-    edges = cv2.Canny(gray, 100, 200)
-    edges_color = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    # Motion Detection
-    fg_mask = back_sub.apply(frame)
-    motion = cv2.cvtColor(fg_mask, cv2.COLOR_GRAY2BGR)
+        # ========== Apply Effects ==========
 
-    # Object Detection (Contours)
-    thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)[1]
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contour_frame = frame.copy()
-    cv2.drawContours(contour_frame, contours, -1, (0, 255, 0), 2)
+        # Grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-    # Sharpen Filter
-    kernel_sharp = np.array([[0, -1, 0],
-                             [-1, 5, -1],
-                             [0, -1, 0]])
-    sharpen = cv2.filter2D(frame, -1, kernel_sharp)
+        # Mirror
+        mirror = cv2.flip(frame, 1)
 
-    # Blur Filter
-    blur = cv2.GaussianBlur(frame, (15, 15), 0)
+        # Edge detect
+        edges = cv2.Canny(gray, 100, 200)
+        edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
-    # Cartoon Effect
-    smooth = cv2.bilateralFilter(frame, 9, 200, 200)
-    cartoon_edges = cv2.Canny(smooth, 50, 150)
-    cartoon_edges = cv2.cvtColor(cartoon_edges, cv2.COLOR_GRAY2BGR)
-    cartoon = cv2.bitwise_and(smooth, cartoon_edges)
+        # Motion detect
+        motion_mask = back_sub.apply(frame)
+        motion_bgr = cv2.cvtColor(motion_mask, cv2.COLOR_GRAY2BGR)
 
-    # ----------------------------
-    # 3. Combine 6 frames into 2×3 grid
-    # ----------------------------
-    top_row = cv2.hconcat([frame, gray_color, mirror_h])
-    bottom_row = cv2.hconcat([edges_color, motion, contour_frame])
+        # Rotate
+        rotate_180 = cv2.rotate(frame, cv2.ROTATE_180)
 
-    combined = cv2.vconcat([top_row, bottom_row])
+        # Combine 2x3 grid for output
+        top_row = cv2.hconcat([frame, gray_bgr, mirror])
+        bottom_row = cv2.hconcat([edges_bgr, motion_bgr, rotate_180])
+        combined = cv2.vconcat([top_row, bottom_row])
 
-    # Resize back to original video size
-    final_frame = cv2.resize(combined, (W, H))
+        combined_resized = cv2.resize(combined, (W, H))
 
-    # Write output
-    out.write(final_frame)
+        out.write(combined_resized)
 
-# ----------------------------
-# 4. Release everything
-# ----------------------------
-cap.release()
-out.release()
+        count += 1
+        progress.progress(min(count / total_frames, 1.0))
 
-print("\n🎉 Advanced video created: advanced_processed_video.mp4")
+    cap.release()
+    out.release()
+
+    st.success("Video processing completed!")
+
+    # Download Button
+    with open(temp_output.name, "rb") as f:
+        st.download_button(
+            label="⬇️ Download Processed Video",
+            data=f,
+            file_name="processed_video.mp4",
+            mime="video/mp4",
+        )
